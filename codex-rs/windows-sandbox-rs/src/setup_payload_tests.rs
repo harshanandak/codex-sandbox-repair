@@ -1,15 +1,21 @@
-//! Checks the setup payload transport: budget selection, byte-exact file round-trip, path
-//! substitution resistance, and cleanup on every exit path.
+//! Checks payload transport selection, byte-exact delivery, and cleanup on every exit path.
 
 use super::PAYLOAD_FILE_PREFIX;
+use super::PAYLOAD_STDIN_ARG;
 use super::SetupPayloadArg;
 use super::inline_payload_budget;
 use super::resolve_payload_argument;
+use super::spawn_with_stdin_payload;
 use anyhow::Result;
+use anyhow::bail;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
+use std::time::Instant;
 
 fn helper_exe() -> PathBuf {
     PathBuf::from(r"C:\very\long\helper\path\codex-windows-sandbox-setup.exe")
@@ -53,7 +59,7 @@ fn oversized_payload_round_trips_through_a_file() -> Result<()> {
     let arg = SetupPayloadArg::prepare(&payload, &helper_exe(), temp.path())?;
 
     assert!(arg.as_str().len() < 1_024, "file argument must stay short");
-    // Exactly what the helper does: read by path while the producer still holds the file.
+    // Exactly what a waiting helper does: read by path while the producer still holds the file.
     assert_eq!(fs::read_to_string(file_path(&arg))?, payload);
     Ok(())
 }
@@ -132,28 +138,93 @@ fn resolve_reads_inline_and_file_payloads() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let payload = oversized_payload();
     let arg = SetupPayloadArg::prepare(&payload, &helper_exe(), temp.path())?;
+    let mut empty = std::io::empty();
 
     assert_eq!(
-        resolve_payload_argument(&["setup".to_string(), arg.as_str().to_string()])?,
+        resolve_payload_argument(&["setup".to_string(), arg.as_str().to_string()], &mut empty)?,
         payload
     );
     assert_eq!(
-        resolve_payload_argument(&["setup".to_string(), "QUJD".to_string()])?,
+        resolve_payload_argument(&["setup".to_string(), "QUJD".to_string()], &mut empty)?,
         "QUJD"
     );
     Ok(())
 }
 
 #[test]
+fn resolve_reads_stdin_payload() -> Result<()> {
+    let payload = oversized_payload();
+    let mut stdin = std::io::Cursor::new(payload.clone().into_bytes());
+
+    assert_eq!(
+        resolve_payload_argument(
+            &["setup".to_string(), PAYLOAD_STDIN_ARG.to_string()],
+            &mut stdin
+        )?,
+        payload
+    );
+    Ok(())
+}
+
+#[test]
 fn resolve_rejects_malformed_arguments() {
-    assert!(resolve_payload_argument(&[]).is_err());
+    let mut empty = std::io::empty();
+    assert!(resolve_payload_argument(&[], &mut empty).is_err());
     assert!(
-        resolve_payload_argument(&["setup".to_string(), "a".to_string(), "b".to_string()])
-            .is_err()
+        resolve_payload_argument(
+            &["setup".to_string(), "a".to_string(), "b".to_string()],
+            &mut empty
+        )
+        .is_err()
     );
 
     let missing = format!("{PAYLOAD_FILE_PREFIX}C:\\missing\\payload.b64");
-    let err = resolve_payload_argument(&["setup".to_string(), missing]).unwrap_err();
+    let err = resolve_payload_argument(&["setup".to_string(), missing], &mut empty).unwrap_err();
 
     assert!(err.to_string().contains("failed to read payload file"));
+}
+
+#[test]
+fn stdin_payload_reaches_a_child_after_the_producer_returns() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let out = temp.path().join("received.b64");
+    let payload = oversized_payload();
+    let mut command = Command::new("powershell.exe");
+    command
+        .env("CODEX_TEST_PAYLOAD_OUT", &out)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            concat!(
+                "$o=[IO.File]::Create($env:CODEX_TEST_PAYLOAD_OUT); ",
+                "[Console]::OpenStandardInput().CopyTo($o); $o.Dispose()"
+            ),
+        ]);
+
+    // Returns after handing the bytes off; it does not wait for the child.
+    spawn_with_stdin_payload(&mut command, &payload)?;
+
+    assert_eq!(
+        read_until_len(&out, payload.len(), Duration::from_secs(30))?,
+        payload.as_bytes()
+    );
+    // The stdin handoff creates no payload file, so only the child's output remains.
+    assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+    Ok(())
+}
+
+fn read_until_len(path: &Path, expected: usize, timeout: Duration) -> Result<Vec<u8>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(bytes) = fs::read(path)
+            && bytes.len() == expected
+        {
+            return Ok(bytes);
+        }
+        if Instant::now() >= deadline {
+            bail!("child did not write {expected} bytes to {} in time", path.display());
+        }
+        sleep(Duration::from_millis(50));
+    }
 }

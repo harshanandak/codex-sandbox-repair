@@ -11,7 +11,6 @@ use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::SetupPayloadArg;
 use codex_windows_sandbox::acquire_sandbox_setup_lock;
 use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::convert_string_sid_to_sid;
@@ -34,6 +33,7 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::set_local_user_flags;
 use codex_windows_sandbox::setup_error_path;
 use codex_windows_sandbox::setup_log_writer;
+use codex_windows_sandbox::spawn_with_stdin_payload;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::sync_persistent_deny_read_acls;
 use codex_windows_sandbox::to_wide;
@@ -193,20 +193,13 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_b64 = BASE64.encode(payload_json);
     let exe = std::env::current_exe().context("locate setup helper")?;
-    let arg = SetupPayloadArg::prepare(&payload_b64, &exe, &sandbox_dir(&payload.codex_home))?;
-    let mut child = Command::new(&exe)
-        .arg(arg.as_str())
-        .stdin(Stdio::null())
+    let mut command = Command::new(&exe);
+    command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .spawn()
-        .context("spawn read ACL helper")?;
-    // The payload file must outlive the child's read, so delete it only after the child exits.
-    let _ = std::thread::spawn(move || {
-        let _ = child.wait();
-        drop(arg);
-    });
+        .creation_flags(0x08000000); // CREATE_NO_WINDOW
+    // The child reads its payload from stdin, so no payload file outlives this handoff.
+    spawn_with_stdin_payload(&mut command, &payload_b64)?;
     Ok(())
 }
 
@@ -509,7 +502,7 @@ fn open_setup_log(sbx_dir: &Path, mode: SetupMode) -> Result<Box<dyn Write>> {
 
 fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
-    let payload_b64 = resolve_payload_argument(&args).map_err(|err| {
+    let payload_b64 = resolve_payload_argument(&args, &mut std::io::stdin()).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
             format!("{err:#}"),
