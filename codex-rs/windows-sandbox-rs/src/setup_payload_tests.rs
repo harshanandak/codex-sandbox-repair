@@ -206,7 +206,7 @@ fn stdin_payload_reaches_a_child_after_the_producer_returns() -> Result<()> {
     let mut command = Command::new("powershell.exe");
     command
         .env("CODEX_TEST_PAYLOAD_OUT", &out)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .args(["-NoProfile", "-NonInteractive", "-File"])
         .arg(&script);
 
     // Returns after handing the bytes off; it does not wait for the child.

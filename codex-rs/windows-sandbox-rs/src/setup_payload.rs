@@ -23,8 +23,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
-use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO;
 use windows_sys::Win32::Storage::FileSystem::FileDispositionInfo;
 use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
@@ -87,7 +87,10 @@ impl SetupPayloadArg {
             .file
             .write_all(payload_b64.as_bytes())
             .context("write setup payload file")?;
-        payload_file.file.flush().context("flush setup payload file")?;
+        payload_file
+            .file
+            .flush()
+            .context("flush setup payload file")?;
         Ok(Self {
             arg: format!("{PAYLOAD_FILE_PREFIX}{}", payload_file.path.display()),
             _payload_file: Some(payload_file),

@@ -22,6 +22,11 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
+      - name: Preserve source line endings
+        working-directory: ${{ github.workspace }}
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
@@ -43,8 +48,8 @@ jobs:
           target: x86_64-pc-windows-msvc
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
-          tool: nextest
-          version: 0.9.103
+          tool: nextest@0.9.103
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
       - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: |
