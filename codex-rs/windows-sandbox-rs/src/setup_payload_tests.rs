@@ -25,6 +25,18 @@ fn oversized_payload() -> String {
     "A".repeat(38_136)
 }
 
+/// Receiver fixture for the `@stdin` handoff. PowerShell only treats a trailing `@stdin` as a
+/// literal positional argument under `-File`; under `-Command` it parses as a splat and fails.
+const STDIN_RECEIVER_SCRIPT: &str = r#"param([string]$transport)
+if ($transport -ne '@stdin') {
+    [Console]::Error.WriteLine("unexpected transport argument: $transport")
+    exit 2
+}
+$output = [IO.File]::Create($env:CODEX_TEST_PAYLOAD_OUT)
+[Console]::OpenStandardInput().CopyTo($output)
+$output.Dispose()
+"#;
+
 fn file_path(arg: &SetupPayloadArg) -> &str {
     arg.as_str()
         .strip_prefix(PAYLOAD_FILE_PREFIX)
@@ -187,20 +199,15 @@ fn resolve_rejects_malformed_arguments() {
 #[test]
 fn stdin_payload_reaches_a_child_after_the_producer_returns() -> Result<()> {
     let temp = tempfile::tempdir()?;
+    let script = temp.path().join("receiver.ps1");
     let out = temp.path().join("received.b64");
+    fs::write(&script, STDIN_RECEIVER_SCRIPT)?;
     let payload = oversized_payload();
     let mut command = Command::new("powershell.exe");
     command
         .env("CODEX_TEST_PAYLOAD_OUT", &out)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            concat!(
-                "$o=[IO.File]::Create($env:CODEX_TEST_PAYLOAD_OUT); ",
-                "[Console]::OpenStandardInput().CopyTo($o); $o.Dispose()"
-            ),
-        ]);
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script);
 
     // Returns after handing the bytes off; it does not wait for the child.
     spawn_with_stdin_payload(&mut command, &payload)?;
@@ -209,8 +216,15 @@ fn stdin_payload_reaches_a_child_after_the_producer_returns() -> Result<()> {
         read_until_len(&out, payload.len(), Duration::from_secs(30))?,
         payload.as_bytes()
     );
-    // The stdin handoff creates no payload file, so only the child's output remains.
-    assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+    // The stdin handoff creates no payload file: exactly the receiver and its output remain.
+    let mut names = fs::read_dir(temp.path())?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<String>>>()?;
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["received.b64".to_string(), "receiver.ps1".to_string()]
+    );
     Ok(())
 }
 
