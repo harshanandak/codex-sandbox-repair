@@ -1,0 +1,97 @@
+name: Windows sandbox payload repair
+
+on:
+  push:
+    branches: [fix/windows-setup-payload]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-msvc-env
+        with:
+          target: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: nextest
+          version: 0.9.103
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: sandbox-windows-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            sandbox-windows-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-
+      - name: Format changed code
+        run: |
+          just fmt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --exit-code
+      - name: Scoped Clippy fixes
+        run: just fix -p codex-windows-sandbox
+      - name: Require committed formatting and lint fixes
+        run: git diff --exit-code
+      - name: Test sandbox crate
+        run: just test -p codex-windows-sandbox
+      - name: Build matching parent and helper binaries
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+        run: >-
+          cargo build --locked --timings
+          --bin codex --bin codex-app-server --bin codex-code-mode-host
+          --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup
+          --bin codex-command-runner
+      - name: Stage binaries with hashes
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'codex-sandbox-repair'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $binaries = @('codex','codex-app-server','codex-code-mode-host','codex-responses-api-proxy','codex-windows-sandbox-setup','codex-command-runner')
+          $manifest = foreach ($name in $binaries) {
+            $file = Join-Path $env:CARGO_TARGET_DIR "debug/$name.exe"
+            Copy-Item -LiteralPath $file -Destination $dest
+            @{name="$name.exe";sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash}
+          }
+          @{commit=$env:GITHUB_SHA;target='x86_64-pc-windows-msvc';profile='dev';binaries=$manifest} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dest 'manifest.json')
+      - name: Upload verified build
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: codex-sandbox-repair-windows
+          path: ${{ runner.temp }}/codex-sandbox-repair/*
+          if-no-files-found: error
+      - name: Capture formatter and Clippy changes
+        if: always()
+        run: git diff --output="${{ runner.temp }}/codex-build-fixes.patch"
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: codex-sandbox-build-diagnostics
+          path: |
+            ${{ runner.temp }}/codex-build-fixes.patch
+            ${{ env.CARGO_TARGET_DIR }}/cargo-timings/cargo-timing.html
+            ${{ env.CARGO_TARGET_DIR }}/nextest/local/junit.xml
