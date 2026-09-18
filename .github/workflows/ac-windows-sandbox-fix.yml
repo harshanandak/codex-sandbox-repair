@@ -85,6 +85,8 @@ jobs:
           CARGO_BIN_EXE_codex_command_runner: ${{ env.CARGO_TARGET_DIR }}\debug\codex-command-runner.exe
         run: just test -p codex-windows-sandbox
       - name: Build matching parent and helper binaries
+        id: build-bins
+        if: always()
         env:
           LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
         run: >-
@@ -93,6 +95,7 @@ jobs:
           --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup
           --bin codex-command-runner
       - name: Stage binaries with hashes
+        if: always() && steps.build-bins.outcome == 'success'
         run: |
           $dest = Join-Path $env:GITHUB_WORKSPACE 'artifacts/codex-sandbox-repair'
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -104,6 +107,7 @@ jobs:
           }
           @{commit=$env:GITHUB_SHA;target='x86_64-pc-windows-msvc';profile='dev';binaries=$manifest} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dest 'manifest.json')
       - name: Upload verified build
+        if: always() && steps.build-bins.outcome == 'success'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-sandbox-repair-windows
