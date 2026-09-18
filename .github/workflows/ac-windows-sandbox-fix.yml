@@ -20,18 +20,24 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/codex-build
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-ci
+      - name: Configure hosted Windows build paths
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
+          git config --global core.longpaths true
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: just@1.51.0
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
         with:
           targets: x86_64-pc-windows-msvc
       - uses: ./.github/actions/setup-msvc-env
-        with:
-          target: x86_64-pc-windows-msvc
-      - uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-pc-windows-msvc
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
@@ -52,6 +58,9 @@ jobs:
           just fmt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --exit-code
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-pc-windows-msvc
       - name: Scoped Clippy fixes
         run: just fix -p codex-windows-sandbox
       - name: Require committed formatting and lint fixes
@@ -68,7 +77,7 @@ jobs:
           --bin codex-command-runner
       - name: Stage binaries with hashes
         run: |
-          $dest = Join-Path $env:RUNNER_TEMP 'codex-sandbox-repair'
+          $dest = Join-Path $env:GITHUB_WORKSPACE 'artifacts/codex-sandbox-repair'
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           $binaries = @('codex','codex-app-server','codex-code-mode-host','codex-responses-api-proxy','codex-windows-sandbox-setup','codex-command-runner')
           $manifest = foreach ($name in $binaries) {
@@ -81,17 +90,21 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-sandbox-repair-windows
-          path: ${{ runner.temp }}/codex-sandbox-repair/*
+          path: artifacts/codex-sandbox-repair/*
           if-no-files-found: error
       - name: Capture formatter and Clippy changes
         if: always()
-        run: git diff --output="${{ runner.temp }}/codex-build-fixes.patch"
+        run: |
+          $dest = Join-Path $env:GITHUB_WORKSPACE 'artifacts/diagnostics'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          git diff --output="$dest/codex-build-fixes.patch"
+          foreach ($relative in @('cargo-timings/cargo-timing.html','nextest/local/junit.xml')) {
+            $file = Join-Path $env:CARGO_TARGET_DIR $relative
+            if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $dest }
+          }
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-sandbox-build-diagnostics
-          path: |
-            ${{ runner.temp }}/codex-build-fixes.patch
-            ${{ env.CARGO_TARGET_DIR }}/cargo-timings/cargo-timing.html
-            ${{ env.CARGO_TARGET_DIR }}/nextest/local/junit.xml
+          path: artifacts/diagnostics/*
