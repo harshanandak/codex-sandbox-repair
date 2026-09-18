@@ -16,6 +16,7 @@ use crate::env::inherit_path_env;
 use crate::env::normalize_null_device_env;
 use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
+use crate::logging::log_note;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
@@ -291,11 +292,27 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 let _ = add_allow_ace(p, readonly_sid.as_ptr());
             }
         } else {
+            let log_dir = codex_home.join(".sandbox");
             for p in &allow {
                 let Some(root_sid) = matching_root_capability(p, acl_sids.write_root_sids) else {
+                    log_note(
+                        &format!(
+                            "legacy sandbox: no capability SID for writable path {}",
+                            p.display()
+                        ),
+                        Some(&log_dir),
+                    );
                     continue;
                 };
-                let _ = ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()]);
+                if let Err(err) = ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()]) {
+                    log_note(
+                        &format!(
+                            "legacy sandbox: failed to grant write access to {}: {err}",
+                            p.display()
+                        ),
+                        Some(&log_dir),
+                    );
+                }
             }
         }
         for p in &deny {

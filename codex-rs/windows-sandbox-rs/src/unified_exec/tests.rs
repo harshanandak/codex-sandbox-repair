@@ -669,7 +669,8 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     );
     assert!(
         wait_for_path(&survival_marker, Duration::from_secs(10)),
-        "sandbox descendant did not survive normal capture exit"
+        "sandbox descendant did not survive normal capture exit\n{}",
+        sandbox_log(codex_home.path())
     );
     wait_for_process_exit(&descendant_process, Duration::from_secs(10))
         .expect("sandbox descendant did not exit after release");
