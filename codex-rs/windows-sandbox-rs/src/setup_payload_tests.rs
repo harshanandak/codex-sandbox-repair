@@ -237,7 +237,10 @@ fn read_until_len(path: &Path, expected: usize, timeout: Duration) -> Result<Vec
             return Ok(bytes);
         }
         if Instant::now() >= deadline {
-            bail!("child did not write {expected} bytes to {} in time", path.display());
+            bail!(
+                "child did not write {expected} bytes to {} in time",
+                path.display()
+            );
         }
         sleep(Duration::from_millis(50));
     }
