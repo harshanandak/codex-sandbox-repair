@@ -135,6 +135,9 @@ mod setup_launch;
 mod setup_mutex;
 
 #[cfg(target_os = "windows")]
+mod setup_payload;
+
+#[cfg(target_os = "windows")]
 mod spawn_prep;
 
 #[cfg(target_os = "windows")]
@@ -368,6 +371,12 @@ pub use setup_error::setup_error_path;
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
 pub use setup_mutex::acquire_sandbox_setup_lock;
+#[cfg(target_os = "windows")]
+pub use setup_payload::PAYLOAD_FILE_PREFIX;
+#[cfg(target_os = "windows")]
+pub use setup_payload::SetupPayloadArg;
+#[cfg(target_os = "windows")]
+pub use setup_payload::resolve_payload_argument;
 #[cfg(target_os = "windows")]
 pub use stdio_bridge::forward_sandbox_session_stdio;
 #[cfg(target_os = "windows")]

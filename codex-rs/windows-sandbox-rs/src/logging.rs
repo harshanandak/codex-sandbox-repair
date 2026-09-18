@@ -80,7 +80,8 @@ pub fn setup_log_writer(base_dir: &Path) -> Result<File> {
     match log.as_ref() {
         Some((file, _parent)) => file.try_clone().context("clone setup log"),
         None => {
-            let (file, parent) = crate::file_write::create_temporary_file(base_dir, ".log")?;
+            let (file, parent, _path) =
+                crate::file_write::create_temporary_file(base_dir, ".log")?;
             let writer = file.try_clone().context("clone setup log")?;
             *log = Some((file, parent));
             Ok(writer)

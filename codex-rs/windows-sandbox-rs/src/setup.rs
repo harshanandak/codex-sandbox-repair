@@ -32,6 +32,7 @@ use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::extract_failure;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
+use crate::setup_payload::SetupPayloadArg;
 use crate::ssh_config_dependencies::ssh_config_dependency_paths;
 use crate::winutil::current_account_name;
 use anyhow::Result;
@@ -360,6 +361,16 @@ fn run_setup_refresh_inner(
     })
 }
 
+/// Prepares the helper payload argument, mapping transport failures to the launch error code.
+fn setup_payload_arg(b64: &str, exe: &Path, sandbox_dir: &Path) -> Result<SetupPayloadArg> {
+    SetupPayloadArg::prepare(b64, exe, sandbox_dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("failed to prepare setup payload: {err:#}"),
+        )
+    })
+}
+
 fn run_setup_refresh_payload(b64: &str, codex_home: &Path) -> Result<()> {
     let exe = find_setup_exe();
     let sbx_dir = sandbox_dir(codex_home);
@@ -375,8 +386,9 @@ fn run_setup_refresh_payload(b64: &str, codex_home: &Path) -> Result<()> {
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let payload_arg = setup_payload_arg(b64, &exe, &sbx_dir)?;
     let mut cmd = Command::new(&exe);
-    cmd.arg(b64)
+    cmd.arg(payload_arg.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -949,10 +961,11 @@ fn run_setup_exe_payload(
         }
     };
 
+    let payload_arg = setup_payload_arg(payload_b64, &exe, &sandbox_dir(codex_home))?;
     if !needs_elevation {
         let status = if retained_handles.is_empty() {
             Command::new(&exe)
-                .arg(payload_b64)
+                .arg(payload_arg.as_str())
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -960,7 +973,7 @@ fn run_setup_exe_payload(
                 .status()
         } else {
             crate::setup_launch::spawn_with_retained_handles(
-                Command::new(&exe).arg(payload_b64),
+                Command::new(&exe).arg(payload_arg.as_str()),
                 retained_handles,
             )
             .and_then(|mut child| child.wait())
@@ -991,7 +1004,7 @@ fn run_setup_exe_payload(
     }
 
     let exe_w = crate::winutil::to_wide(&exe);
-    let params = quote_arg(payload_b64);
+    let params = quote_arg(payload_arg.as_str());
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };

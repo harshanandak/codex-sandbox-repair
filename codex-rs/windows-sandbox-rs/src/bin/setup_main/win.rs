@@ -11,6 +11,7 @@ use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
+use codex_windows_sandbox::SetupPayloadArg;
 use codex_windows_sandbox::acquire_sandbox_setup_lock;
 use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::convert_string_sid_to_sid;
@@ -25,6 +26,7 @@ use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::open_directory_no_reparse;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::path_write_aces_need_refresh;
+use codex_windows_sandbox::resolve_payload_argument;
 use codex_windows_sandbox::resolve_sid;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
@@ -191,14 +193,20 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_b64 = BASE64.encode(payload_json);
     let exe = std::env::current_exe().context("locate setup helper")?;
-    Command::new(&exe)
-        .arg(payload_b64)
+    let arg = SetupPayloadArg::prepare(&payload_b64, &exe, &sandbox_dir(&payload.codex_home))?;
+    let mut child = Command::new(&exe)
+        .arg(arg.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .spawn()
         .context("spawn read ACL helper")?;
+    // The payload file must outlive the child's read, so delete it only after the child exits.
+    let _ = std::thread::spawn(move || {
+        let _ = child.wait();
+        drop(arg);
+    });
     Ok(())
 }
 
@@ -500,14 +508,13 @@ fn open_setup_log(sbx_dir: &Path, mode: SetupMode) -> Result<Box<dyn Write>> {
 }
 
 fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
-    let mut args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 2 {
-        return Err(anyhow::Error::new(SetupFailure::new(
+    let args = std::env::args().collect::<Vec<_>>();
+    let payload_b64 = resolve_payload_argument(&args).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
-            "expected payload argument",
-        )));
-    }
-    let payload_b64 = args.remove(1);
+            format!("{err:#}"),
+        ))
+    })?;
     let payload_json = BASE64.decode(payload_b64).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,

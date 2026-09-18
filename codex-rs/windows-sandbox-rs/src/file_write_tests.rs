@@ -50,8 +50,7 @@ fn failed_replacement_does_not_truncate_target_or_leave_temporary_file() -> Resu
 #[test]
 fn fresh_output_cannot_be_written_or_replaced_while_held() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let (mut file, _directory) = create_temporary_file(temp.path(), ".log")?;
-    let path = fs::read_dir(temp.path())?.next().unwrap()?.path();
+    let (mut file, _directory, path) = create_temporary_file(temp.path(), ".log")?;
 
     assert!(
         OpenOptions::new()

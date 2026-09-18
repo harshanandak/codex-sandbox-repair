@@ -13,6 +13,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
+use std::path::PathBuf;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::NTSTATUS;
 use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
@@ -63,7 +64,7 @@ pub fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
         .context("output must have a file name")?
         .encode_wide()
         .collect();
-    let (mut file, directory) = create_temporary_file(parent, ".tmp")?;
+    let (mut file, directory, _temporary_path) = create_temporary_file(parent, ".tmp")?;
     let result: Result<()> = (|| {
         file.write_all(contents)?;
 
@@ -119,7 +120,10 @@ pub fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     result.with_context(|| format!("replace output {}", path.display()))
 }
 
-pub(crate) fn create_temporary_file(parent: &Path, suffix: &str) -> Result<(File, OwnedHandle)> {
+pub(crate) fn create_temporary_file(
+    parent: &Path,
+    suffix: &str,
+) -> Result<(File, OwnedHandle, PathBuf)> {
     let directory = open_directory_no_reparse(
         parent,
         FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
@@ -132,6 +136,7 @@ pub(crate) fn create_temporary_file(parent: &Path, suffix: &str) -> Result<(File
         .context("generate sandbox output name")?;
     let id = u64::from_le_bytes(random);
     let name = format!("sandbox-{id:016x}{suffix}");
+    let path = parent.join(&name);
     let mut name: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
     let file = open_no_reparse(
         directory.as_raw_handle() as HANDLE,
@@ -141,7 +146,7 @@ pub(crate) fn create_temporary_file(parent: &Path, suffix: &str) -> Result<(File
         FILE_CREATE,
         FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
     )?;
-    Ok((File::from(file), directory))
+    Ok((File::from(file), directory, path))
 }
 
 #[cfg(test)]
