@@ -80,6 +80,7 @@ jobs:
             Copy-Item -LiteralPath (Join-Path $debug $bin) -Destination $deps -Force
           }
       - name: Test sandbox crate
+        id: crate-tests
         env:
           CARGO_BIN_EXE_codex_windows_sandbox_setup: ${{ env.CARGO_TARGET_DIR }}\debug\codex-windows-sandbox-setup.exe
           CARGO_BIN_EXE_codex_command_runner: ${{ env.CARGO_TARGET_DIR }}\debug\codex-command-runner.exe
@@ -96,6 +97,8 @@ jobs:
           --bin codex-command-runner
       - name: Stage binaries with hashes
         if: always() && steps.build-bins.outcome == 'success'
+        env:
+          TEST_GATE_OUTCOME: ${{ steps.crate-tests.outcome }}
         run: |
           $dest = Join-Path $env:GITHUB_WORKSPACE 'artifacts/codex-sandbox-repair'
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -105,12 +108,12 @@ jobs:
             Copy-Item -LiteralPath $file -Destination $dest
             @{name="$name.exe";sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash}
           }
-          @{commit=$env:GITHUB_SHA;target='x86_64-pc-windows-msvc';profile='dev';binaries=$manifest} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dest 'manifest.json')
+          @{commit=$env:GITHUB_SHA;target='x86_64-pc-windows-msvc';profile='dev';test_gate=$env:TEST_GATE_OUTCOME;binaries=$manifest} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dest 'manifest.json')
       - name: Upload verified build
         if: always() && steps.build-bins.outcome == 'success'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
-          name: codex-sandbox-repair-windows
+          name: ${{ steps.crate-tests.outcome == 'success' && 'codex-sandbox-repair-windows' || 'codex-sandbox-repair-windows-diagnostic' }}
           path: artifacts/codex-sandbox-repair/*
           if-no-files-found: error
       - name: Capture formatter and Clippy changes
