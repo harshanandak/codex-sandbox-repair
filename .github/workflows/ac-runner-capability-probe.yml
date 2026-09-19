@@ -1,0 +1,23 @@
+name: Runner capability probe
+
+# Zero-Rust isolation probe for the two failing legacy sandbox tests. No repo source is built,
+# no install, no secrets. Prints a JSON summary distinguishing capability-SID ACL identity
+# from parent-job-object descendant survival on this runner.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Run isolated capability probe
+        shell: pwsh
+        run: ./probe/runner-capability-probe.ps1
