@@ -23,10 +23,12 @@ public static class ProbeNative {
     [StructLayout(LayoutKind.Sequential)]
     public struct SID_AND_ATTRIBUTES { public IntPtr Sid; public int Attributes; }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct STARTUPINFO {
         public int cb;
-        public IntPtr lpReserved, lpDesktop, lpTitle;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpReserved;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpDesktop;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpTitle;
         public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
         public short wShowWindow, cbReserved2;
         public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
@@ -48,6 +50,12 @@ public static class ProbeNative {
         string lpApplicationName, string lpCommandLine, int dwCreationFlags, IntPtr lpEnvironment,
         string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
 
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CreateProcessAsUserW(IntPtr hToken, string lpApplicationName, string lpCommandLine,
+        IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, int dwCreationFlags,
+        IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern int WaitForSingleObject(IntPtr hHandle, int dwMilliseconds);
 
@@ -64,6 +72,9 @@ public static class ProbeNative {
 
 $result.env.whoami = (whoami) 2>&1 | Out-String
 $result.env.psVersion = $PSVersionTable.PSVersion.ToString()
+$cmdExe = if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\cmd.exe' } else { 'C:\Windows\System32\cmd.exe' }
+$result.env.systemRoot = "$env:SystemRoot"
+$result.env.cmdExe = "$cmdExe"
 try {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $result.env.isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -106,7 +117,7 @@ try {
         ForEach-Object { "$($_.FileSystemRights)|inherited=$($_.IsInherited)|flags=$($_.InheritanceFlags)" })
 
     # Control: current token deletes its own file.
-    & "$env:SystemRoot\System32\cmd.exe" /d /c "del /f /q `"$controlFile`"" | Out-Null
+    & $cmdExe /d /c "del /f /q `"$controlFile`"" | Out-Null
     $result.aclIdentity.controlDeleted = -not (Test-Path -LiteralPath $controlFile)
 
     # Restricted token: restrict to the custom SID + Everyone + logon SID, write-restricted.
@@ -146,13 +157,14 @@ try {
         } else {
             $si = [ProbeNative+STARTUPINFO]::new()
             $si.cb = [Runtime.InteropServices.Marshal]::SizeOf([type][ProbeNative+STARTUPINFO])
+            $si.lpDesktop = 'Winsta0\Default'
             $pi = [ProbeNative+PROCESS_INFORMATION]::new()
-            $cmdLine = "/d /c del /f /q `"$grantFile`""
-            $spawned = [ProbeNative]::CreateProcessWithTokenW(
-                $newToken, 0, "$env:SystemRoot\System32\cmd.exe", $cmdLine, 0x08000000,
-                [IntPtr]::Zero, $null, [ref]$si, [ref]$pi)
+            $cmdLine = "`"$cmdExe`" /d /c del /f /q `"$grantFile`""
+            $spawned = [ProbeNative]::CreateProcessAsUserW(
+                $newToken, $null, $cmdLine, [IntPtr]::Zero, [IntPtr]::Zero, $false, 0x00000400,
+                [IntPtr]::Zero, $env:TEMP, [ref]$si, [ref]$pi)
             if (-not $spawned) {
-                $result.aclIdentity.error = "CreateProcessWithTokenW failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+                $result.aclIdentity.error = "CreateProcessAsUserW failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
             } else {
                 [void][ProbeNative]::WaitForSingleObject($pi.hProcess, 10000)
                 $exitCode = 0
